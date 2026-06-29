@@ -4291,27 +4291,30 @@ function refreshPushOptInBanner() {
 function enablePushNotifications() {
   if (!window.OneSignalDeferred) return;
   window.OneSignalDeferred.push(async (OneSignal) => {
-    await OneSignal.Notifications.requestPermission();
-    const sub = OneSignal.User.PushSubscription;
-    // optedIn can be a stale local flag from an earlier attempt that never
-    // actually completed registration (e.g. before the service worker was
-    // fixed) — if it's set but there's no real subscription id behind it,
-    // force a fresh opt-out/opt-in instead of trusting the flag.
-    if (Notification.permission === 'granted') {
-      if (sub.optedIn && !sub.id) {
-        await sub.optOut();
-      }
-      if (!sub.optedIn) {
+    // The whole body is wrapped — an uncaught throw inside this callback
+    // (e.g. from optIn() itself failing) was an unhandled promise
+    // rejection with no UI feedback at all, which is exactly the "clicking
+    // the button did nothing" symptom seen on retry.
+    try {
+      await OneSignal.Notifications.requestPermission();
+      const sub = OneSignal.User.PushSubscription;
+      // Always force a clean opt-out/opt-in cycle on manual trigger,
+      // rather than trusting optedIn (which can be a stale local flag from
+      // an earlier attempt that never actually completed registration).
+      if (Notification.permission === 'granted') {
+        if (sub.optedIn) await sub.optOut();
         await sub.optIn();
       }
-    }
-    refreshPushOptInBanner();
-    if (OneSignal.User.PushSubscription.optedIn && OneSignal.User.PushSubscription.id) {
-      notify('Push notifications enabled');
-    } else if (Notification.permission === 'denied') {
-      notify('Notifications blocked — enable them in your browser/site settings.', true);
-    } else {
-      notify('Could not enable push notifications — try again.', true);
+      refreshPushOptInBanner();
+      if (OneSignal.User.PushSubscription.optedIn && OneSignal.User.PushSubscription.id) {
+        notify('Push notifications enabled');
+      } else if (Notification.permission === 'denied') {
+        notify('Notifications blocked — enable them in your browser/site settings.', true);
+      } else {
+        notify('Subscribed locally, but no subscription id yet — see debug.', true);
+      }
+    } catch (err) {
+      notify('Push enable failed: ' + (err.message || err), true);
     }
   });
 }
