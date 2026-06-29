@@ -3190,8 +3190,12 @@ async function shareDocument(docTitle, content) {
         iframe.onerror = reject;
         iframe.srcdoc = html;
       });
-      // One extra frame so layout/fonts settle before rasterizing.
-      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      // Brief pause so layout settles before rasterizing. Deliberately a
+      // plain timer rather than requestAnimationFrame — rAF callbacks can be
+      // throttled or never fire at all while the tab is backgrounded (e.g.
+      // the user switches apps right after tapping Share), which would hang
+      // this indefinitely or capture the content before layout finished.
+      await new Promise((r) => setTimeout(r, 80));
 
       const scale = 2;
       const body = iframe.contentDocument.body;
