@@ -3238,7 +3238,13 @@ async function shareDocument(docTitle, content) {
       // from swapping anything.
       const orientation = widthMM >= heightMM ? 'l' : 'p';
       const pdf = new window.jspdf.jsPDF({ orientation, unit: 'mm', format: [widthMM, heightMM] });
-      pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, widthMM, heightMM);
+      // JPEG, not PNG: jsPDF re-embeds PNGs as an uncompressed-ish RGB
+      // stream plus a full separate alpha (SMask) layer, even though the
+      // canvas background is forced opaque white and has no transparency
+      // to preserve — that turned an ~80KB screenshot into a 3MB+ PDF.
+      // JPEG has no alpha channel at all, and at this quality the
+      // difference is imperceptible for a text/table document.
+      pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, widthMM, heightMM);
 
       const filename = safeTitle + '.pdf';
       const blob = pdf.output('blob');
