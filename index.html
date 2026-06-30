@@ -2198,6 +2198,94 @@ function onMRETypeChange() {
       <td><button class="btn btn-danger btn-sm btn-icon" onclick="removeItemRow(this)">✕</button></td>
     </tr>`;
   }
+  refreshDeliveryPhotoLabel();
+}
+
+function refreshDeliveryPhotoLabel() {
+  const btn = document.getElementById('mre-photo-btn');
+  if (!btn) return;
+  const isMaterial = formItemType() === 'material';
+  btn.textContent = isMaterial ? '📷 Scan Delivery Vehicle' : '📷 Photo of Completed Work';
+  const hint = btn.nextElementSibling;
+  if (hint) hint.textContent = `Opens your camera — fills in Date${isMaterial ? ' and Vehicle No.' : ''} automatically. Not stored, used only to read these fields.`;
+}
+
+// ── Delivery photo capture (MRE) ──
+// capture="environment" on the file input forces the live camera rather
+// than the photo gallery — the point is that Date (and, for material
+// receipts, Vehicle No. via OCR) reflect what's actually happening right
+// now, not whatever photo someone happens to have. The photo itself is
+// never stored or uploaded anywhere beyond the one-shot OCR.space call —
+// only the values read off it end up in the record.
+const OCR_SPACE_API_KEY = 'K86832528088957';
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('Could not read photo'));
+    reader.readAsDataURL(file);
+  });
+}
+
+// Indian plates: 2-letter state code, 1-2 digit RTO code, 1-2 letter
+// series, 4 digit number — e.g. MH12AB1234. OCR text is noisy (other
+// writing on the vehicle, line breaks), so scan the whole cleaned-up
+// output for the first substring matching that shape rather than
+// expecting the plate to be the only thing recognized.
+function extractPlateNumber(text) {
+  const cleaned = (text || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const match = cleaned.match(/[A-Z]{2}\d{1,2}[A-Z]{1,2}\d{4}/);
+  return match ? match[0] : null;
+}
+
+async function ocrVehiclePlate(base64Image) {
+  const form = new FormData();
+  form.append('apikey', OCR_SPACE_API_KEY);
+  form.append('base64Image', base64Image);
+  form.append('OCREngine', '2');
+  form.append('scale', 'true');
+  form.append('isOverlayRequired', 'false');
+  const res = await fetch('https://api.ocr.space/parse/image', { method: 'POST', body: form });
+  const data = await res.json();
+  if (data.IsErroredOnProcessing) throw new Error((data.ErrorMessage && data.ErrorMessage[0]) || 'OCR request failed');
+  const text = (data.ParsedResults || []).map((r) => r.ParsedText).join(' ');
+  return extractPlateNumber(text);
+}
+
+async function handleDeliveryPhoto(input) {
+  const file = input.files && input.files[0];
+  input.value = ''; // allow re-selecting the same shot again if needed
+  if (!file) return;
+
+  // Date reflects the moment of capture, not whenever the form happens to
+  // be saved.
+  document.getElementById('f-date').value = today();
+
+  if (formItemType() !== 'material') {
+    notify('Date set from photo — verify it looks right.');
+    return;
+  }
+
+  const btn = document.getElementById('mre-photo-btn');
+  const originalLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Reading plate…';
+  try {
+    const base64 = await fileToBase64(file);
+    const plate = await ocrVehiclePlate(base64);
+    if (plate) {
+      document.getElementById('f-vehicle').value = plate;
+      notify(`Vehicle No. detected: ${plate} — please verify it's correct`);
+    } else {
+      notify('Could not read the plate clearly — please enter Vehicle No. manually.', true);
+    }
+  } catch (err) {
+    notify('Vehicle scan failed: ' + (err.message || err) + ' — please enter Vehicle No. manually.', true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalLabel;
+  }
 }
 
 // (legacy stub — kept so old inline HTML refs don't error; new forms use radio)
@@ -2764,6 +2852,11 @@ function openMREModal(arg) {
       <div class="field-group"><label>Vehicle No.</label><input type="text" id="f-vehicle" placeholder="e.g. MH12AB1234" value="${mre?.vehicle||''}"></div>
       <div class="field-group"><label>Challan No.</label><input type="text" id="f-challan" placeholder="Supplier challan no." value="${mre?.challan||''}"></div>
     </div>
+    <div style="margin-bottom:12px;">
+      <input type="file" id="mre-photo-input" accept="image/*" capture="environment" style="display:none;" onchange="handleDeliveryPhoto(this)">
+      <button type="button" class="btn btn-secondary btn-sm" id="mre-photo-btn" onclick="document.getElementById('mre-photo-input').click()">${initType==='material'?'📷 Scan Delivery Vehicle':'📷 Photo of Completed Work'}</button>
+      <div style="font-size:11px;color:var(--text-3);margin-top:4px;">Opens your camera — fills in Date${initType==='material'?' and Vehicle No.':''} automatically. Not stored, used only to read these fields.</div>
+    </div>
     <div class="section-divider">Items Received / Labor Deployed</div>
     <div style="display:flex;gap:24px;align-items:center;padding:4px 0 10px;">
       <label style="cursor:pointer;display:flex;align-items:center;gap:6px;"><input type="radio" name="f-item-type" value="material" ${initType==='material'?'checked':''} onchange="onMRETypeChange()"> Material</label>
@@ -2838,6 +2931,7 @@ function autofillMREFromPO(sel) {
     note.textContent = `✦ Ordered qty auto-filled from ${po.id} — enter received/deployed qty`;
     document.getElementById('mre-items-table').before(note);
   }
+  refreshDeliveryPhotoLabel();
 }
 
 function addMREItemRow() {
